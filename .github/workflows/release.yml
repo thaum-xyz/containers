@@ -20,17 +20,10 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
-      tag: ${{ steps.tag.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      - id: tag
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "tag=$(date -u +'%Y.%m.%d')" >> "$GITHUB_OUTPUT"
 
       - id: set-matrix
         shell: bash
@@ -40,7 +33,6 @@ jobs:
           BASE="${{ github.event.before }}"
           HEAD="${{ github.sha }}"
 
-          # If BASE is empty/zero (rare, e.g. first commit), publish everything
           if [ -z "$BASE" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ]; then
             mapfile -t names < <(find images -mindepth 2 -maxdepth 2 -type f -name Dockerfile -printf '%h\n' \
               | sed 's|^images/||' | sort -u)
@@ -75,6 +67,13 @@ jobs:
     needs: discover
     if: ${{ fromJSON(needs.discover.outputs.matrix).include[0] != null }}
     runs-on: ubuntu-latest
+
+    # Prevents two workflow runs from publishing the same image at the same time
+    # (avoids both selecting the same next PATCH).
+    concurrency:
+      group: ghcr-publish-${{ github.repository }}-${{ matrix.name }}
+      cancel-in-progress: false
+
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.discover.outputs.matrix) }}
@@ -92,6 +91,56 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Compute next tag (YYYY.WW.PATCH)
+        id: nexttag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OWNER: ${{ github.repository_owner }}
+          REPO: ${{ github.event.repository.name }}
+          IMAGE: ${{ matrix.name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # ISO week-year/week in UTC
+          YEAR="$(date -u +%G)"
+          WEEK="$(date -u +%V)"   # 01..53
+          PREFIX="${YEAR}.${WEEK}"
+
+          # GHCR package name typically "<repo>/<image>"
+          PKG="${REPO}%2F${IMAGE}"
+
+          # Query tags from GHCR with pagination; try org then user namespace.
+          fetch_tags() {
+            local endpoint="$1"
+            # Output tags, one per line. If package doesn't exist / 404, return empty.
+            gh api --silent --paginate -H "Accept: application/vnd.github+json" "${endpoint}?per_page=100" \
+              --jq '.[].metadata.container.tags[]?' 2>/dev/null || true
+          }
+
+          TAGS="$(fetch_tags "/orgs/${OWNER}/packages/container/${PKG}/versions")"
+          if [ -z "$TAGS" ]; then
+            TAGS="$(fetch_tags "/users/${OWNER}/packages/container/${PKG}/versions")"
+          fi
+
+          MAX_PATCH=0
+          # Scan tags matching PREFIX.<num>
+          while IFS= read -r t; do
+            [[ -n "$t" ]] || continue
+            if [[ "$t" =~ ^${PREFIX}\.([0-9]+)$ ]]; then
+              p="${BASH_REMATCH[1]}"
+              # Strip any leading zeros safely
+              p=$((10#$p))
+              if (( p > MAX_PATCH )); then MAX_PATCH="$p"; fi
+            fi
+          done <<< "$TAGS"
+
+          NEXT_PATCH=$((MAX_PATCH + 1))
+          TAG="${PREFIX}.${NEXT_PATCH}"
+
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Computed tag: $TAG"
+
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
@@ -100,6 +149,6 @@ jobs:
           push: true
           platforms: linux/amd64,linux/arm64
           tags: |
-            ${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.name }}:${{ needs.discover.outputs.tag }}
+            ${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.name }}:${{ steps.nexttag.outputs.tag }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
