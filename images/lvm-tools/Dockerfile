@@ -15,5 +15,5 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 
 # Keep the image generic; the DaemonSet provides the command/script.
-ENTRYPOINT ["/bin/sh", "-lc"]
+ENTRYPOINT ["/bin/sh", "-c"]
 CMD ["sleep", "infinity"]
