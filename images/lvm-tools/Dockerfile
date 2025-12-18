@@ -16,4 +16,4 @@ RUN apt-get update \
 
 # Keep the image generic; the DaemonSet provides the command/script.
 ENTRYPOINT ["/bin/sh", "-c"]
-CMD ["sleep", "infinity"]
+CMD ["sleep infinity"]
