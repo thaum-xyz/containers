@@ -7,6 +7,7 @@ FROM debian:bookworm-slim
 # - coreutils: common basic utils (often already present, but keep it explicit)
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
+      bash \
       util-linux \
       lvm2 \
       ca-certificates \
