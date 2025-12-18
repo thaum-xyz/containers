@@ -1,0 +1,98 @@
+name: Test build changed container images
+
+on:
+  pull_request:
+    paths:
+      - "images/**"
+      - ".github/workflows/test-build.yml"
+  push:
+    branches: ["main"]
+    paths:
+      - "images/**"
+      - ".github/workflows/test-build.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - id: set-matrix
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Decide diff range depending on event type
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE="${{ github.event.pull_request.base.sha }}"
+            HEAD="${{ github.event.pull_request.head.sha }}"
+          else
+            BASE="${{ github.event.before }}"
+            HEAD="${{ github.sha }}"
+          fi
+
+          # If BASE is empty/zero (e.g. first push), build everything
+          if [ -z "$BASE" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ]; then
+            mapfile -t names < <(find images -mindepth 2 -maxdepth 2 -type f -name Dockerfile -printf '%h\n' \
+              | sed 's|^images/||' | sort -u)
+          else
+            mapfile -t names < <(git diff --name-only "$BASE" "$HEAD" -- 'images/**' \
+              | awk -F/ 'NF>=2 {print $2}' | sort -u)
+          fi
+
+          # Keep only valid image dirs that have Dockerfile
+          valid=()
+          for n in "${names[@]:-}"; do
+            if [ -f "images/$n/Dockerfile" ]; then
+              valid+=("$n")
+            fi
+          done
+
+          if [ ${#valid[@]} -eq 0 ]; then
+            echo 'matrix={"include":[]}' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          json='{"include":['
+          first=1
+          for n in "${valid[@]}"; do
+            if [ $first -eq 0 ]; then json+=','; fi
+            first=0
+            json+="{\"name\":\"$n\"}"
+          done
+          json+=']}'
+          echo "matrix=$json" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: discover
+    if: ${{ fromJSON(needs.discover.outputs.matrix).include[0] != null }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.discover.outputs.matrix) }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: images/${{ matrix.name }}
+          file: images/${{ matrix.name }}/Dockerfile
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
