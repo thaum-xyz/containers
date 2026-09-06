@@ -1,0 +1,53 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended"
+  ],
+  "prCreation": "immediate",
+  "assignees": [
+    "paulfantom"
+  ],
+  "reviewers": [
+    "paulfantom"
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Tool versions pinned in CI or the Makefile, each marked with a renovate comment. Nothing here uses it yet; it is the same idiom as helm-charts so that a future pin needs only its comment.",
+      "managerFilePatterns": [
+        "/^\\.github\\/workflows\\/[^/]+\\.ya?ml$/",
+        "/^Makefile$/"
+      ],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)(?: versioning=(?<versioning>\\S+))?(?: extractVersion=(?<extractVersion>\\S+))?\\s+\\S+?\\s*[:=]{1,2}\\s*[\"']?(?<currentValue>[^\"'\\s]+)"
+      ],
+      "versioningTemplate": "{{#if versioning}}{{{versioning}}}{{else}}semver{{/if}}"
+    }
+  ],
+  "packageRules": [
+    {
+      "description": "CI dependencies, grouped and automerged as in ankhmorpork and helm-charts.",
+      "matchFileNames": [
+        ".github/**",
+        "Makefile"
+      ],
+      "groupName": "github actions",
+      "addLabels": [
+        "dependencies/ci",
+        "dependencies/automerge"
+      ],
+      "automerge": true
+    },
+    {
+      "description": "Base images are the whole substance of this repository, so they are never automerged -- a base bump rebuilds and republishes an image the cluster then pulls.",
+      "matchManagers": [
+        "dockerfile"
+      ],
+      "addLabels": [
+        "dependencies/base"
+      ],
+      "groupName": "base images",
+      "minimumReleaseAge": "7 days"
+    }
+  ]
+}
